@@ -17,6 +17,8 @@ func NewRouter(db *gorm.DB) *gin.Engine {
 		note.GET("/:id", noteHandler.ListOne)
 		note.POST("/:id/check", noteHandler.Check)
 		note.GET("/:id/render", noteHandler.Render)
+		note.PUT("/:id", noteHandler.Update)
+		note.DELETE("/:id", noteHandler.Delete)
 	}
 	return r
 }

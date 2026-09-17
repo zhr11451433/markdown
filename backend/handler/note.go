@@ -92,37 +92,17 @@ func (u *NoteHandler) List(c *gin.Context) {
 //列出某一个笔记 :id url /api/notes/:id
 
 func (u *NoteHandler) ListOne(c *gin.Context) {
-	var listNote database.Note
-	id, err := Id(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "id错误"})
-		return
-	}
-	if err := u.db.Where("id = ?", id).First(&listNote).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "笔记不存在"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库错误"})
+	note, ok := u.getNoteByID(c)
+	if !ok {
 		return
 	}
 	//找到了
-	c.JSON(http.StatusOK, listNote)
+	c.JSON(http.StatusOK, note)
 }
 
 func (u *NoteHandler) Render(c *gin.Context) {
-	id, err := Id(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "id错误"})
-		return
-	}
-	var note database.Note
-	if err := u.db.Where("id = ?", id).First(&note).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "笔记不存在"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库错误"})
+	note, ok := u.getNoteByID(c)
+	if !ok {
 		return
 	}
 	content := note.Content
@@ -141,18 +121,8 @@ func (u *NoteHandler) Render(c *gin.Context) {
 }
 
 func (u *NoteHandler) Check(c *gin.Context) {
-	id, err := Id(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "id错误"})
-		return
-	}
-	var note database.Note
-	if err := u.db.Where("id = ?", id).First(&note).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "笔记不存在"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库错误"})
+	note, ok := u.getNoteByID(c)
+	if !ok {
 		return
 	}
 	content := note.Content
@@ -162,7 +132,7 @@ func (u *NoteHandler) Check(c *gin.Context) {
 	data.Set("language", "auto")
 	resp, err := u.client.PostForm(languageToolURL, data)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "语法检查暂不可用"})
 		return
 	}
 	defer resp.Body.Close()
@@ -173,22 +143,74 @@ func (u *NoteHandler) Check(c *gin.Context) {
 	var mistake LanguageToolResponse
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	err = json.Unmarshal(body, &mistake)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, mistake)
 }
 
-func Id(c *gin.Context) (uint, error) {
-	idString := c.Param("id")
-	uid, err := strconv.ParseUint(idString, 10, 64)
+func (u *NoteHandler) getNoteByID(c *gin.Context) (*database.Note, bool) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {
-		return 0, err
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的笔记ID"})
+		return nil, false
 	}
-	return uint(uid), nil
+	var note database.Note
+	if err := u.db.First(&note, uint(id)).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "笔记不存在"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "数据库错误"})
+		}
+		return nil, false
+	}
+	return &note, true
+}
+
+//PUT /api/notes/:id
+
+func (u *NoteHandler) Update(c *gin.Context) {
+	note, ok := u.getNoteByID(c)
+	if !ok {
+		return
+	}
+	var updateNote noteRequest
+	err := c.ShouldBindJSON(&updateNote)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	note.Title = updateNote.Title
+	note.Content = updateNote.Content
+	if err := u.db.Save(&note).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "笔记更新失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status":      "更新成功",
+		"id":          note.ID,
+		"new_title":   note.Title,
+		"new_content": note.Content,
+		"updated_at":  note.UpdatedAt,
+	})
+}
+
+//DELETE /api/notes/:id
+
+func (u *NoteHandler) Delete(c *gin.Context) {
+	note, ok := u.getNoteByID(c)
+	if !ok {
+		return
+	}
+	if err := u.db.Delete(&note).Error; err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "笔记删除失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "笔记删除成功"})
 }
