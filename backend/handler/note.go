@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -209,8 +210,61 @@ func (u *NoteHandler) Delete(c *gin.Context) {
 		return
 	}
 	if err := u.db.Delete(&note).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "笔记删除失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "笔记删除失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "笔记删除成功"})
+}
+
+//POST /api/notes/upload   # multipart 传 .md 文件 → 读文本 → 复用 Save 的存库逻辑
+
+func (u *NoteHandler) Upload(c *gin.Context) {
+	// 1. 限制整个请求体大小（例如 1MB），防止超大文件
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20) //1mb
+
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件读取失败"})
+		return
+	}
+	// 3. 校验文件大小（fileHeader.Size 是字节数
+	if file.Size > 1<<20 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件不能超过 1MB"})
+		return
+	}
+	// 4. 校验后缀名
+	if !strings.HasSuffix(strings.ToLower(file.Filename), ".md") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "只支持 .md 文件"})
+		return
+	}
+	// 5. 打开文件，得到 io.Reader
+	src, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "打开文件失败"})
+		return
+	}
+	defer src.Close()
+	// 6. 读取内容
+	data, err := io.ReadAll(src)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取文件失败"})
+		return
+	}
+	content := string(data)
+	// 7. 从文件名去 .md 作为标题
+	title := strings.TrimSuffix(file.Filename, ".md")
+	// 8. 保存到数据库
+	note := database.Note{
+		Title:   title,
+		Content: content,
+	}
+	if err := u.db.Create(&note).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存笔记失败"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"id":    note.ID,
+		"title": note.Title,
+	})
 }

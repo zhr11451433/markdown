@@ -19,6 +19,7 @@ func NewRouter(db *gorm.DB) *gin.Engine {
 		note.GET("/:id/render", noteHandler.Render)
 		note.PUT("/:id", noteHandler.Update)
 		note.DELETE("/:id", noteHandler.Delete)
+		note.POST("/upload", noteHandler.Upload)
 	}
 	return r
 }
